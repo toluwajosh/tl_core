@@ -7,7 +7,7 @@ from distutils.version import LooseVersion
 
 class TL_model(object):
   """docstring for TL_model"""
-  def __init__(self, model_tag, model_path, layer_out):
+  def __init__(self, sess, model_tag, model_path, layer_out):
     super(TL_model, self).__init__()
     """
     :param model_path: path to model to use for transfer learning
@@ -17,9 +17,10 @@ class TL_model(object):
     self.model_path = model_path
 
     # load model from path
-    tf.save_model.loader.load(sess, [self.model_tag], self.model_path)
+    tf.saved_model.loader.load(sess, [self.model_tag], self.model_path)
 
     # model properties
+    graph = tf.get_default_graph()
     self.image_input = graph.get_tensor_by_name('image_input:0')
     self.keep_prob = graph.get_tensor_by_name('keep_prob:0')
     self.output_tensor = graph.get_tensor_by_name('layer'+str(layer_out)+'_out:0')
@@ -47,5 +48,6 @@ if __name__ == '__main__':
   model_tag = 'vgg16'
   layer_out = 7
 
-  # create transfer learning model instance
-  tl_model = TL_model(model_tag, model_path, layer_out)
+  with tf.Session() as sess:
+    # create transfer learning model instance
+    tl_model = TL_model(sess, model_tag, model_path, layer_out)
