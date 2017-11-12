@@ -25,21 +25,97 @@ class TL_model(object):
     self.keep_prob = graph.get_tensor_by_name('keep_prob:0')
     self.output_tensor = graph.get_tensor_by_name('layer'+str(layer_out)+'_out:0')
 
-    # show some ouput
-    print('Model Properties: \n \
-      Image Input Size: {} \
-      Keep Probability: {} \
-      Output Tensor Size: {}'.format(self.image_input, 
-                                      self.keep_prob, 
-                                      self.output_tensor))
+    # # show some output
+    # print('Model Properties: \n \
+    #   Image Input Size: {} \
+    #   Keep Probability: {} \
+    #   Output Tensor Size: {}'.format(self.image_input, 
+    #                                   self.keep_prob, 
+    #                                   self.output_tensor))
 
-  def model_update(self):
-    print('no implemented yet')
-    pass
+  def layers(self, fc_layers, dropouts, mode):
+    """
+    :param fc_layers: list containing number of units in the fully connected layers
+    :param dropouts: list containing dropout probability for each fully connected layer
+    """
+    assert (len(fc_layers) == len(dropouts)), \
+          "The Size of fully connected layers and dropouts are not equal"
+    # fc_layer = tf.layers.
+
+    # dense = tf.reshape(self.output_tensor, [-1, 4096])
+
+    dense = tf.layers.dense(inputs=self.output_tensor, units=fc_layers[0], 
+                            activation=tf.nn.relu)
+    dropout = tf.layers.dropout(inputs=dense, rate=dropouts[0],
+                            training=mode == tf.estimator.ModeKeys.TRAIN)
+
+    for x in range(1, len(fc_layers)-1):
+      dense = tf.layers.dense(inputs=dense, units=fc_layers[x], 
+                              activation=tf.nn.relu)
+      dropout = tf.layers.dropout(inputs=dense, rate=dropouts[x],
+                              training=mode == tf.estimator.ModeKeys.TRAIN)
+
+    logits = tf.layers.dense(inputs=dropout[-1], units=fc_layers[-1])
+
+    return logits
+
+  # def train(self, sess, ephochs, batch_size, get_batches_fn, train_op, 
+  #           cross_entropy_loss, input_image, correct_label, 
+  #           keep_prob, learning_rate):
+  #   """
+  #   Train neural network and print out the loss during training.
+  #   :param sess: TF Session
+  #   :param epochs: Number of epochs
+  #   :param batch_size: Batch size
+  #   :param get_batches_fn: Function to get batches of training data.  Call using get_batches_fn(batch_size)
+  #   :param train_op: TF Operation to train the neural network
+  #   :param cross_entropy_loss: TF Tensor for the amount of loss
+  #   :param input_image: TF Placeholder for input images
+  #   :param correct_label: TF Placeholder for label images
+  #   :param keep_prob: TF Placeholder for dropout keep probability
+  #   :param learning_rate: TF Placeholder for learning rate
+  #   """
+  #   for epoch in range(epochs):
+  #     for i, (image, label) in enumerate(get_batches_fn(batch_size)):
+  #       # Training
+
+  #       _, loss = sess.run([train_op, cross_entropy_loss], 
+  #           feed_dict={input_image:image, correct_label:label, keep_prob:0.4}) # , learning_rate:1e-4
+
+  #       print("epoch: {}, batch: {}, loss: {}".format(epoch+1, i, loss))
+
 
 if __name__ == '__main__':
   data_dir = './data'
-  
+
+  # Load pickled data
+  import pickle
+  import cv2
+  import numpy as np
+  from keras.utils.np_utils import to_categorical
+
+  num_classes = 43
+
+  ##
+  training_file = 'data/traffic-signs-data/train.p'
+  validation_file = 'data/traffic-signs-data/valid.p'
+  testing_file = 'data/traffic-signs-data/test.p'
+
+  with open(training_file, mode='rb') as f:
+      train = pickle.load(f)
+  with open(testing_file, mode='rb') as f:
+      test = pickle.load(f)
+      
+  X_train, y_train = train['features'][:1000], train['labels'][:1000]
+  X_test, y_test = test['features'], test['labels']
+
+  print("size of training data: {}".format(np.shape(X_train)))
+
+  one_hot_y_train = to_categorical(y_train, num_classes)
+
+  print("size of training labels: {}".format(np.shape(one_hot_y_train)))
+  ##
+
   # Download pretrained vgg model
   helper.maybe_download_pretrained_vgg(data_dir)
   
@@ -47,7 +123,69 @@ if __name__ == '__main__':
 
   model_tag = 'vgg16'
   layer_out = 7
+  image_shape = (224, 224)
+  epochs = 30
+  batch_size = 5
 
   with tf.Session() as sess:
+    ##
+    # get_batches_fn = helper.gen_batch_function(
+    #                   os.path.join(data_dir, 'data_road/training'), image_shape)
+    ##
+
     # create transfer learning model instance
     tl_model = TL_model(sess, model_tag, model_path, layer_out)
+    fc_layers = [1024, 1024, num_classes]
+    dropouts = [0.4, 0.4, 1.0]
+
+    mode = tf.estimator.ModeKeys.TRAIN
+    label = tf.placeholder(tf.int32, shape=[None, None, num_classes])
+    
+    logits = tl_model.layers(fc_layers, dropouts, mode)
+
+    # print("Logits: ", logits)
+
+    logits = tf.reshape(logits, (-1, num_classes))
+    correct_label = tf.reshape(label, (-1, num_classes))
+
+    input_image = tl_model.image_input
+    keep_prob = tl_model.keep_prob
+
+    cross_entropy_loss = tf.reduce_mean(
+        tf.nn.softmax_cross_entropy_with_logits(
+            labels=correct_label, logits=logits))
+
+    with tf.name_scope("training"):
+      optimizer = tf.train.AdamOptimizer()
+      # Create a variable to track the global step.
+      global_step = tf.Variable(0, name='global_step', trainable=False)
+      # Use the optimizer to apply the gradients that minimize the loss
+      # (and also increment the global step counter) as a single training step.
+      train_op = optimizer.minimize(cross_entropy_loss, global_step=global_step)
+
+
+    # to save the trained model (preparation)
+    saver = tf.train.Saver()
+
+    sess.run(tf.global_variables_initializer())
+    # print("\n Training... \n")
+    for epoch in range(epochs):
+      # Training
+
+        _, loss = sess.run([train_op, cross_entropy_loss], 
+            feed_dict={input_image:X_train, correct_label:one_hot_y_train, keep_prob:0.4}) # , learning_rate:1e-4
+
+        print("epoch: {}, batch: {}, loss: {}".format(epoch+1, i, loss))
+
+      # # (image, label) = get_batches_fn(batch_size)
+      # output = get_batches_fn(batch_size)
+      # print("output: ", output)
+      # # print("size of batch: {}".format(np.shape(image)))
+      # # print("\n Training... \n")
+      # for i, (image, label) in enumerate(get_batches_fn(batch_size)):
+      #   # Training
+
+      #   _, loss = sess.run([train_op, cross_entropy_loss], 
+      #       feed_dict={input_image:image, correct_label:label, keep_prob:0.4}) # , learning_rate:1e-4
+
+      #   print("epoch: {}, batch: {}, loss: {}".format(epoch+1, i, loss))
