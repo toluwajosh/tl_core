@@ -22,7 +22,7 @@ class TL_model(object):
     # model properties
     self.image_input = graph.get_tensor_by_name('image_input:0')
     self.keep_prob = graph.get_tensor_by_name('keep_prob:0')
-    self.output_tensor = graph.get_tensor_by_name('layer'+layer_out'_out:0')
+    self.output_tensor = graph.get_tensor_by_name('layer'+str(layer_out)+'_out:0')
 
     # show some ouput
     print('Model Properties: \n \
@@ -31,6 +31,10 @@ class TL_model(object):
       Output Tensor Size: {}'.format(self.image_input, 
                                       self.keep_prob, 
                                       self.output_tensor))
+
+  def model_update(self):
+    print('no implemented yet')
+    pass
 
 if __name__ == '__main__':
   data_dir = './data'
