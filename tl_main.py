@@ -4,6 +4,23 @@ import helper
 import warnings
 from distutils.version import LooseVersion
 
+import pickle
+import cv2
+import numpy as np
+from keras.utils.np_utils import to_categorical
+from sklearn.utils import shuffle
+
+
+# Check TensorFlow Version
+assert LooseVersion(tf.__version__) >= LooseVersion('1.0'), 'Please use TensorFlow version 1.0 or newer.  You are using {}'.format(tf.__version__)
+print('TensorFlow Version: {}'.format(tf.__version__))
+
+# Check for a GPU
+if not tf.test.gpu_device_name():
+    warnings.warn('No GPU found. Please use a GPU to train your neural network.')
+else:
+    print('Default GPU Device: {}'.format(tf.test.gpu_device_name()))
+
 
 class TL_model(object):
   """docstring for TL_model"""
@@ -25,28 +42,30 @@ class TL_model(object):
     self.keep_prob = graph.get_tensor_by_name('keep_prob:0')
     self.output_tensor = graph.get_tensor_by_name('layer'+str(layer_out)+'_out:0')
 
-  def layers(self, fc_layers, dropouts, mode):
+  def fc_layers(self, fc_units, dropouts):
     """
-    :param fc_layers: list containing number of units in the fully connected layers
+    :param fc_units: list containing number of units in the fully connected layers
     :param dropouts: list containing dropout probability for each fully connected layer
-    :param mode: the mode of the network
     """
-    assert (len(fc_layers) == len(dropouts)), \
+    # define a placeholder to control dropout
+    self.network_mode = tf.placeholder(tf.bool)
+
+    assert (len(fc_units) == len(dropouts)), \
           "The Size of fully connected layers and dropouts are not equal"
 
-    dense = tf.layers.dense(inputs=self.output_tensor, units=fc_layers[0], 
+    dense = tf.layers.dense(inputs=self.output_tensor, units=fc_units[0], 
                             activation=tf.nn.relu)
     dropout = tf.layers.dropout(inputs=dense, rate=dropouts[0],
-                            training=mode == tf.estimator.ModeKeys.TRAIN)
+                            training=self.network_mode == tf.estimator.ModeKeys.TRAIN)
 
-    for x in range(1, len(fc_layers)-1):
-      dense = tf.layers.dense(inputs=dropout, units=fc_layers[x], 
+    for x in range(1, len(fc_units)-1):
+      dense = tf.layers.dense(inputs=dropout, units=fc_units[x], 
                               activation=tf.nn.relu)
       dropout = tf.layers.dropout(inputs=dense, rate=dropouts[x],
-                              training=mode == tf.estimator.ModeKeys.TRAIN)
+                              training=self.network_mode == tf.estimator.ModeKeys.TRAIN)
 
-    self.logits = tf.layers.dense(inputs=dropout, units=fc_layers[-1])
-    self.num_classes = fc_layers[-1]
+    self.logits = tf.layers.dense(inputs=dropout, units=fc_units[-1])
+    self.num_classes = fc_units[-1]
 
 
   def train(self, sess, X_train, y_train, X_validate=None, y_validate=None, 
@@ -100,7 +119,9 @@ class TL_model(object):
 
         _, loss = sess.run([train_op, cross_entropy_loss], 
             feed_dict={self.image_input:new_X_train[offset:end], 
-                        correct_label:new_y_train[offset:end], self.keep_prob:keep_prob}) # , learning_rate:1e-4
+                        correct_label:new_y_train[offset:end], 
+                        self.keep_prob:keep_prob,
+                        self.network_mode:tf.estimator.ModeKeys.EVAL}) # , learning_rate:1e-4
 
         print("epoch: {}, batch: {}, loss: {}".format(epoch+1, current_batch, loss))
       if X_validate.any()!=None:
@@ -128,7 +149,9 @@ class TL_model(object):
       new_X_data, new_y_data = shuffle(X_data, y_data)
       accuracy = sess.run(accuracy_operation, 
         feed_dict={self.image_input:new_X_data[offset:end], 
-                      correct_label:new_y_data[offset:end], self.keep_prob:keep_prob})
+                      correct_label:new_y_data[offset:end], 
+                      self.keep_prob:keep_prob,
+                      self.network_mode:tf.estimator.ModeKeys.EVAL})
       total_accuracy += (accuracy * batch_size)
     return (total_accuracy / num_examples)
 
@@ -149,18 +172,11 @@ class TL_model(object):
         raise
 
 if __name__ == '__main__':
+  
   data_dir = './data'
-
-  # Load pickled data
-  import pickle
-  import cv2
-  import numpy as np
-  from keras.utils.np_utils import to_categorical
-  from sklearn.utils import shuffle
-
   num_classes = 43
 
-  ##
+  # Load pickled data
   training_file = 'data/traffic-signs-data/train.p'
   validation_file = 'data/traffic-signs-data/valid.p'
   testing_file = 'data/traffic-signs-data/test.p'
@@ -177,6 +193,8 @@ if __name__ == '__main__':
   X_test, y_test = test['features'], test['labels']
 
   print("\nsize of training data: {}".format(np.shape(X_train)))
+  print("\nsize of validating data: {}".format(np.shape(X_validate)))
+  print("\nsize of test data: {}".format(np.shape(X_test)))
 
   y_train = to_categorical(y_train, num_classes)
   y_validate = to_categorical(y_validate, num_classes)
@@ -186,39 +204,38 @@ if __name__ == '__main__':
 
   num_examples = np.shape(X_train)[0]
 
-  print("\nNumber of samples {}".format(num_examples))
-  ##
-
-  # Download pretrained vgg model
+  # Download pretrained vgg model, if not downloaded yet
   helper.maybe_download_pretrained_vgg(data_dir)
   
+  # load pretrained model
   model_path = os.path.join(data_dir, 'vgg')
 
   model_tag = 'vgg16'
   layer_out = 7
   image_shape = (224, 224)
+
+  # train properties
   epochs = 1
   batch_size = 250
 
   with tf.Session() as sess:
-    ##
-    # get_batches_fn = helper.gen_batch_function(
-    #                   os.path.join(data_dir, 'data_road/training'), image_shape)
-    ##
 
     # create transfer learning model instance
     tl_model = TL_model(sess, model_tag, model_path, layer_out)
-    fc_layers = [1024, 1024, num_classes]
+
+    # define added layers
+    fc_units = [1024, 1024, num_classes]
     dropouts = [0.4, 0.4, 1.0]
 
     # for training:
-    mode = tf.estimator.ModeKeys.TRAIN
-    # logits = tl_model.layers(fc_layers, dropouts, mode)
-    tl_model.layers(fc_layers, dropouts, mode)
-    # tl_model.train(sess, 
-    #                 X_train, y_train, 
-    #                 X_validate, y_validate,
-    #                 epochs=epochs,
-    #                 batch_size=batch_size,
-    #                 save_checkpoint='./data/model_saves/test_train.ckpt')
-    tl_model.test(X_test, y_test, model_save_path='./data/model_saves/test_train.ckpt')
+    tl_model.fc_layers(fc_units, dropouts) # for fully connected layers
+    
+    tl_model.train(sess, 
+                    X_train, y_train, 
+                    X_validate, y_validate,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    save_checkpoint='./data/model_saves/test_train.ckpt')
+
+    tl_model.test(X_test, y_test, 
+                    model_save_path='./data/model_saves/test_train.ckpt')

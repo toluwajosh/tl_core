@@ -103,3 +103,4 @@ ENV/
 # user defined
 data/
 *.p
+data_utils.py
