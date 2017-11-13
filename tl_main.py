@@ -50,12 +50,12 @@ class TL_model(object):
                             training=mode == tf.estimator.ModeKeys.TRAIN)
 
     for x in range(1, len(fc_layers)-1):
-      dense = tf.layers.dense(inputs=dense, units=fc_layers[x], 
+      dense = tf.layers.dense(inputs=dropout, units=fc_layers[x], 
                               activation=tf.nn.relu)
       dropout = tf.layers.dropout(inputs=dense, rate=dropouts[x],
                               training=mode == tf.estimator.ModeKeys.TRAIN)
 
-    logits = tf.layers.dense(inputs=dropout[-1], units=fc_layers[-1])
+    logits = tf.layers.dense(inputs=dropout, units=fc_layers[-1])
 
     return logits
 
@@ -93,6 +93,7 @@ if __name__ == '__main__':
   import cv2
   import numpy as np
   from keras.utils.np_utils import to_categorical
+  from sklearn.utils import shuffle
 
   num_classes = 43
 
@@ -106,14 +107,18 @@ if __name__ == '__main__':
   with open(testing_file, mode='rb') as f:
       test = pickle.load(f)
       
-  X_train, y_train = train['features'][:1000], train['labels'][:1000]
+  X_train, y_train = train['features'], train['labels']
   X_test, y_test = test['features'], test['labels']
 
-  print("size of training data: {}".format(np.shape(X_train)))
+  print("\nsize of training data: {}".format(np.shape(X_train)))
 
-  one_hot_y_train = to_categorical(y_train, num_classes)
+  y_train = to_categorical(y_train, num_classes)
 
-  print("size of training labels: {}".format(np.shape(one_hot_y_train)))
+  print("\nsize of training labels: {}".format(np.shape(y_train)))
+
+  num_examples = np.shape(X_train)[0]
+
+  print("\nNumber of samples {}".format(num_examples))
   ##
 
   # Download pretrained vgg model
@@ -125,7 +130,7 @@ if __name__ == '__main__':
   layer_out = 7
   image_shape = (224, 224)
   epochs = 30
-  batch_size = 5
+  batch_size = 100
 
   with tf.Session() as sess:
     ##
@@ -139,17 +144,21 @@ if __name__ == '__main__':
     dropouts = [0.4, 0.4, 1.0]
 
     mode = tf.estimator.ModeKeys.TRAIN
-    label = tf.placeholder(tf.int32, shape=[None, None, num_classes])
+    label = tf.placeholder(tf.int32, shape=(None))
     
     logits = tl_model.layers(fc_layers, dropouts, mode)
 
-    # print("Logits: ", logits)
+    print("\nLogits: ", logits)
 
-    logits = tf.reshape(logits, (-1, num_classes))
-    correct_label = tf.reshape(label, (-1, num_classes))
+    # logits = tf.reshape(logits, (-1, num_classes))
+    # correct_label = tf.reshape(label, (-1, num_classes))
+    correct_label = tf.one_hot(label, num_classes)
 
     input_image = tl_model.image_input
     keep_prob = tl_model.keep_prob
+
+    print("\nInput image shape: ", input_image)
+
 
     cross_entropy_loss = tf.reduce_mean(
         tf.nn.softmax_cross_entropy_with_logits(
@@ -170,12 +179,16 @@ if __name__ == '__main__':
     sess.run(tf.global_variables_initializer())
     # print("\n Training... \n")
     for epoch in range(epochs):
-      # Training
+      new_X_train, new_y_train = shuffle(X_train, y_train)
+      # Training, use batches
+      for offset in range(0, num_examples, batch_size):
+        end = offset + batch_size
 
         _, loss = sess.run([train_op, cross_entropy_loss], 
-            feed_dict={input_image:X_train, correct_label:one_hot_y_train, keep_prob:0.4}) # , learning_rate:1e-4
+            feed_dict={input_image:new_X_train[offset:end], 
+                        correct_label:new_y_train[offset:end], keep_prob:0.4}) # , learning_rate:1e-4
 
-        print("epoch: {}, batch: {}, loss: {}".format(epoch+1, i, loss))
+        print("epoch: {}, batch: {}, loss: {}".format(epoch+1, epoch, loss))
 
       # # (image, label) = get_batches_fn(batch_size)
       # output = get_batches_fn(batch_size)
