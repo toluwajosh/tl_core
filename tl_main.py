@@ -67,6 +67,31 @@ class TL_model(object):
     self.logits = tf.layers.dense(inputs=dropout, units=fc_units[-1])
     self.num_classes = fc_units[-1]
 
+  def rec_layers(self, rec_units, dropouts):
+
+    # data = [batch_size, sequence_lenght, input_dimension]
+    num_hidden = 512
+    cell = tf.nn.rnn_cell.LSTMCell(num_hidden, state_is_tuple=True)
+
+    val, state = tf.nn.dynamic_rnn(cell, data, dtype=tf.float32)
+
+    val = tf.transpose(val, [1, 0, 2]) # to switch batch size with sequence size
+    last = tf.gather(val, int(val.get_shape()[0]) - 1)
+
+    weight = tf.Variable(tf.truncated_normal([num_hidden, int(target.get_shape()[1])]))
+    bias = tf.Variable(tf.constant(0.1, shape=[target.get_shape()[1]]))
+
+    prediction = tf.nn.softmax(tf.matmul(last, weight) + bias)
+    cross_entropy = -tf.reduce_sum(target * tf.log(tf.clip_by_value(prediction,1e-10,1.0)))
+
+    # the optimizer
+    optimizer = tf.train.AdamOptimizer()
+    minimize = optimizer.minimize(cross_entropy)
+
+    # calculate errors
+    mistakes = tf.not_equal(tf.argmax(target, 1), tf.argmax(prediction, 1))
+    error = tf.reduce_mean(tf.cast(mistakes, tf.float32))
+
 
   def train(self, sess, X_train, y_train, X_validate=None, y_validate=None, 
             epochs=30, batch_size=100, keep_prob=0.4, learning_rate=None,
@@ -94,6 +119,7 @@ class TL_model(object):
             labels=correct_label, logits=self.logits))
 
     # set up training
+    # first set up optimizer
     with tf.name_scope("training"):
       optimizer = tf.train.AdamOptimizer()
       # Create a variable to track the global step.
@@ -215,7 +241,7 @@ if __name__ == '__main__':
   image_shape = (224, 224)
 
   # train properties
-  epochs = 1
+  epochs = 30
   batch_size = 250
 
   with tf.Session() as sess:
