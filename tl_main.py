@@ -42,16 +42,20 @@ class TL_model(object):
     self.keep_prob = graph.get_tensor_by_name('keep_prob:0')
     self.output_tensor = graph.get_tensor_by_name('layer'+str(layer_out)+'_out:0')
 
+    # define a placeholder to control dropout
+    self.network_mode = tf.placeholder(tf.bool)
+
   def fc_layers(self, fc_units, dropouts):
     """
     :param fc_units: list containing number of units in the fully connected layers
     :param dropouts: list containing dropout probability for each fully connected layer
     """
-    # define a placeholder to control dropout
-    self.network_mode = tf.placeholder(tf.bool)
+    
 
     assert (len(fc_units) == len(dropouts)), \
           "The Size of fully connected layers and dropouts are not equal"
+
+    self.output_tensor = tf.reshape(self.output_tensor, [-1, self.output_tensor.get_shape()[-1]])
 
     dense = tf.layers.dense(inputs=self.output_tensor, units=fc_units[0], 
                             activation=tf.nn.relu)
@@ -67,30 +71,63 @@ class TL_model(object):
     self.logits = tf.layers.dense(inputs=dropout, units=fc_units[-1])
     self.num_classes = fc_units[-1]
 
-  def rec_layers(self, rec_units, dropouts):
 
-    # data = [batch_size, sequence_lenght, input_dimension]
-    num_hidden = 512
-    cell = tf.nn.rnn_cell.LSTMCell(num_hidden, state_is_tuple=True)
+  def rc_layers(self, rec_units, dropouts):
 
-    val, state = tf.nn.dynamic_rnn(cell, data, dtype=tf.float32)
+    self.num_classes = rec_units[-1]
+    num_hidden = rec_units[0]
 
-    val = tf.transpose(val, [1, 0, 2]) # to switch batch size with sequence size
-    last = tf.gather(val, int(val.get_shape()[0]) - 1)
+    # input data to lstm cell should be in the format: [batch_size, sequence_length, input_dimension]
+    # -1 means, to infer the size of the input
+    rc_input = tf.reshape(self.output_tensor, [-1, 1, self.output_tensor.get_shape()[-1]])
 
-    weight = tf.Variable(tf.truncated_normal([num_hidden, int(target.get_shape()[1])]))
-    bias = tf.Variable(tf.constant(0.1, shape=[target.get_shape()[1]]))
+    cell = tf.nn.rnn_cell.LSTMCell(num_hidden,state_is_tuple=True)
 
-    prediction = tf.nn.softmax(tf.matmul(last, weight) + bias)
-    cross_entropy = -tf.reduce_sum(target * tf.log(tf.clip_by_value(prediction,1e-10,1.0)))
+    outputs, _ = tf.nn.dynamic_rnn(cell, rc_input, dtype=tf.float32)
 
-    # the optimizer
-    optimizer = tf.train.AdamOptimizer()
-    minimize = optimizer.minimize(cross_entropy)
+    outputs = tf.reshape(outputs, [-1, num_hidden])
 
-    # calculate errors
-    mistakes = tf.not_equal(tf.argmax(target, 1), tf.argmax(prediction, 1))
-    error = tf.reduce_mean(tf.cast(mistakes, tf.float32))
+    weight = tf.get_variable("weight", [num_hidden, self.num_classes])
+    bias = tf.get_variable("bias", [self.num_classes])
+
+    self.logits = tf.matmul(outputs, weight) + bias
+
+
+  def multi_rc_layers(self, rec_units, dropouts):
+
+    self.num_classes = rec_units[-1]
+    num_hidden = rec_units[-2]
+
+    # print("\nVGG Output Tensor: ", self.output_tensor)
+
+    # input data to lstm cell should be in the format: [batch_size, sequence_length, input_dimension]
+    # -1 means, to infer the size of the input
+    rc_input = tf.reshape(self.output_tensor, [-1, 1, self.output_tensor.get_shape()[-1]])
+    # print("\nrc input Tensor: ", rc_input)
+
+    # In case of multiple layers: here 2 LSTMCells
+    rnn_layers = [tf.nn.rnn_cell.LSTMCell(size) for size in rec_units[:-1]]
+    # Then: create a RNN cell composed sequentially of a number of RNNCells
+    multi_rnn_cell = tf.nn.rnn_cell.MultiRNNCell(rnn_layers, state_is_tuple=True)
+
+    # defining initial state, 
+    # TODO: Implement initial_state. Need to specify a batch size
+    # right now batch size is not a global variable or placeholder
+    # initial_state = rnn_cell.zero_state(batch_size, dtype=tf.float32)
+
+    outputs, _ = tf.nn.dynamic_rnn(cell=multi_rnn_cell, 
+                                    inputs=rc_input, 
+                                    # initial_state=initial_state,
+                                    dtype=tf.float32)
+
+    outputs = tf.reshape(outputs, [-1, num_hidden])
+
+    print("\n>> LSTM output: ",outputs)
+
+    weight = tf.get_variable("weight", [num_hidden, self.num_classes])
+    bias = tf.get_variable("bias", [self.num_classes])
+  
+    self.logits = tf.matmul(outputs, weight) + bias
 
 
   def train(self, sess, X_train, y_train, X_validate=None, y_validate=None, 
@@ -219,6 +256,7 @@ if __name__ == '__main__':
   X_test, y_test = test['features'], test['labels']
 
   print("\nsize of training data: {}".format(np.shape(X_train)))
+  print("\nsize of training labels: {}".format(np.shape(y_train)))
   print("\nsize of validating data: {}".format(np.shape(X_validate)))
   print("\nsize of test data: {}".format(np.shape(X_test)))
 
@@ -242,7 +280,7 @@ if __name__ == '__main__':
 
   # train properties
   epochs = 30
-  batch_size = 250
+  batch_size = 100
 
   with tf.Session() as sess:
 
@@ -250,18 +288,23 @@ if __name__ == '__main__':
     tl_model = TL_model(sess, model_tag, model_path, layer_out)
 
     # define added layers
-    fc_units = [1024, 1024, num_classes]
+    # fc_units = [1024, 1024, num_classes]
+    # rc_units = [128, 256, num_classes]
+    rc_units = [128, 128, 256, num_classes]
     dropouts = [0.4, 0.4, 1.0]
 
     # for training:
-    tl_model.fc_layers(fc_units, dropouts) # for fully connected layers
+    # tl_model.fc_layers(fc_units, dropouts) # for fully connected layers
+    tl_model.multi_rc_layers(rc_units, dropouts) # for lstm layers
+
+    print("\nLogits: ", tl_model.logits)
     
     tl_model.train(sess, 
                     X_train, y_train, 
                     X_validate, y_validate,
                     epochs=epochs,
                     batch_size=batch_size,
-                    save_checkpoint='./data/model_saves/test_train.ckpt')
+                    save_checkpoint='./data/model_saves/rc_test_train.ckpt')
 
-    tl_model.test(X_test, y_test, 
-                    model_save_path='./data/model_saves/test_train.ckpt')
+    # tl_model.test(X_test, y_test, 
+    #                 model_save_path='./data/model_saves/test_train.ckpt')
