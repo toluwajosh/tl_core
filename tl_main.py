@@ -1,14 +1,15 @@
-import os.path
-import tensorflow as tf
-import helper
-import warnings
-from distutils.version import LooseVersion
-
-import pickle
 import cv2
+import helper
+import pickle
+import os.path
+import warnings
 import numpy as np
-from keras.utils.np_utils import to_categorical
+import tensorflow as tf
+
 from sklearn.utils import shuffle
+from sklearn.externals import joblib
+from distutils.version import LooseVersion
+from keras.utils.np_utils import to_categorical
 
 
 # Check TensorFlow Version
