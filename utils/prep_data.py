@@ -48,17 +48,26 @@ def make_dataset(raw_data_dir, dataset_save_path):
   
   images = []
   labels = []
-  for names in glob.glob(raw_data_dir+'/*.jpg'):
+  all_files = glob.glob(raw_data_dir+'/*.jpg')
+  # sort according time created
+  all_files.sort(key=os.path.getmtime)
+  for names in all_files:
     # read image
     print("Image name: ", names)
-    # img = cv2.imread(names,0)
+    img = cv2.imread(names,0)
+    # print(type(img))
     # images.append(img)
+    
+    # extract target score
     label = float(names.split('-')[-1].split('.')[0])/100
     print("Label: ", label)
-    # extract target score
+
+    # append data:
+    images.append(img)
+    labels.append(label)
   # assert len(images) == len(labels) "Lenght of Samples and Labels do not match!!!"
-  dataset = [images, labels]
-  joblib.dump(dataset, dataset_save_path+'/action_dataset.pkl')
+  dataset = (images, labels)
+  joblib.dump(dataset, dataset_save_path+'/action_dataset_1.pkl', compress=9)
 
 
 def annotate_videos():
@@ -180,3 +189,5 @@ def annotate_videos():
 if __name__ == '__main__':
   # annotate_videos()
   make_dataset("data/all_data", "data/processed_dataset")
+  data = joblib.load("data/processed_dataset/action_dataset_2.pkl")
+  print(np.shape(data[0]))
