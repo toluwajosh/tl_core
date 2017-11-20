@@ -1,4 +1,5 @@
 import cv2
+import glob
 import helper
 import pickle
 import os.path
@@ -21,6 +22,73 @@ if not tf.test.gpu_device_name():
     warnings.warn('No GPU found. Please use a GPU to train your neural network.')
 else:
     print('Default GPU Device: {}'.format(tf.test.gpu_device_name()))
+
+
+class TF_data(object):
+  """docstring for TF_data"""
+  def __init__(self, batch_size=None):
+    super(TF_data, self).__init__()
+    if batch_size:
+      self.batch_size = batch_size
+
+
+  def make_data(self, data_dir):
+    """
+    make a tensorflow dataset
+    """
+    samples = []
+    labels = []
+
+    # load samples paths
+    all_files = glob.glob(data_dir+'/*.jpg')
+
+    # sort according time created
+    all_files.sort(key=os.path.getmtime)
+    for i, names in enumerate(all_files):
+  
+      # extract target score
+      label = float(names.split('-')[-1].split('.')[0])/100
+
+      # append data:
+      samples.append(names)
+      labels.append(label)
+
+    self.num_of_samples = len(samples)
+
+    data = tf.data.Dataset.from_tensor_slices((samples, labels))
+    data = data.map(self._input_parser)
+    
+    # use batch size
+    if self.batch_size:
+      data = data.batch(self.batch_size)
+
+    return data
+
+
+
+  def _input_parser(self, img_path, label):
+    img_file = tf.read_file(img_path)
+    img_decoded = tf.image.decode_jpeg(img_file, channels=3)
+
+    # do some preprocessing: reshape, etc..
+    # img_decoded = tf.image.resize_images(img_decoded, [224,224])
+    img_decoded = tf.image.resize_images(img_decoded, [112,112])
+
+    return img_decoded, label
+
+
+  def make_iterator(self, data_dir):
+    self.data = self.make_data(data_dir)
+    
+    self.iterator = self.data.make_initializable_iterator()
+    # self.iterator = tf.data.Iterator.from_structure(self.data.output_types, self.data.output_shapes)
+
+
+  def initialize_iterator(self):
+    # data = self.make_data(data_dir)
+    self.iterator.make_initializer(self.data).initializer
+    print("Initialized!!!")
+
 
 
 class TL_model(object):
@@ -195,6 +263,89 @@ class TL_model(object):
       if save_checkpoint:
         saver.save(sess, save_checkpoint)
 
+  def train_on_iter(self, sess, tf_data, data_dir, validation_data=None, 
+            epochs=30, batch_size=100, keep_prob=0.4, learning_rate=None,
+            save_checkpoint=None):
+
+    prediction = tf.sigmoid(self.logits)
+
+    label = tf.placeholder(tf.float32, shape=(None))
+
+    # print("Number of samples: ", train_data.num_of_samples)
+
+    # loss function:
+    train_loss = tf.reduce_mean(
+        tf.losses.mean_squared_error(
+            labels=label, predictions=prediction))
+
+    # set up training
+    # first set up optimizer
+    with tf.name_scope("training"):
+      optimizer = tf.train.AdamOptimizer()
+      # Create a variable to track the global step.
+      global_step = tf.Variable(0, name='global_step', trainable=False)
+      # Use the optimizer to apply the gradients that minimize the loss
+      # (and also increment the global step counter) as a single training step.
+      train_op = optimizer.minimize(train_loss, global_step=global_step)
+
+
+    if self.load_prev_model(save_checkpoint):
+      print("Loaded previous model...")
+      saver = tf.train.Saver()
+    elif save_checkpoint:
+      # to save the trained model (preparation)
+      saver = tf.train.Saver()
+      sess.run(tf.global_variables_initializer())
+    else:
+      sess.run(tf.global_variables_initializer())
+
+    # sess.run(train_data.iterator().initializer)
+    # sess.run(train_data.make_initializer())
+
+    # print("\n Training... \n")
+    for epoch in range(epochs):
+      tf_data.make_iterator(data_dir)
+      
+      # initialize iterator
+      # tf_data.initialize_iterator()
+      sess.run(tf_data.iterator.initializer)
+
+      next_element = tf_data.iterator.get_next()
+
+      # Training, use batches
+      # initialize iterator
+      # sess.run(train_data.iterator().initializer)
+      # 0, train_data.num_of_samples, batch_size
+      current_batch = 0
+      # for batch in range(5):
+      for batch in range(0, tf_data.num_of_samples, batch_size):
+        current_batch += 1
+
+        try:
+          X_train = sess.run(next_element)[0]
+          y_train = sess.run(next_element)[1]
+        except tf.errors.OutOfRangeError:
+          print("End of dataset")
+          break
+
+        _, loss = sess.run([train_op, train_loss], 
+            feed_dict={self.image_input:X_train, 
+                        label:y_train, 
+                        self.keep_prob:keep_prob,
+                        self.network_mode:tf.estimator.ModeKeys.EVAL}) # , learning_rate:1e-4
+
+        print("epoch: {}, batch: {}, loss: {}".format(epoch+1, current_batch, loss))
+
+
+
+      # # if X_validate.any()!=None:
+      # #   print("\nEvaluating....")
+      # #   validation_accuracy = self.evaluate(X_validate, y_validate)
+      # #   print("Validation Accuracy: ", validation_accuracy)
+      if save_checkpoint:
+        print("Saving checkpoint...")
+        saver.save(sess, save_checkpoint)
+
 
   def evaluate(self, X_data, y_data, keep_prob=1.0):
 
@@ -220,68 +371,49 @@ class TL_model(object):
     return (total_accuracy / num_examples)
 
   def test(self, X_data, y_data, model_save_path=None, keep_prob=1.0):
-    if model_save_path:
-      try:
-        meta_graph_file = model_save_path+'.meta'
-        with tf.Session() as sess:
-          sess.run(tf.global_variables_initializer())
-          print("meta_graph_file: ",meta_graph_file)
-          new_saver = tf.train.import_meta_graph(meta_graph_file)
-          new_saver.restore(sess, model_save_path)
+    if self.load_prev_model(model_save_path):
+      accuracy = self.evaluate(X_data, y_data)
+      print("Test Accuracy: ", accuracy)
+    else:
+      exit()
 
-          accuracy = self.evaluate(X_data, y_data)
-          print("Test Accuracy: ", accuracy)
-      except Exception as e:
-        print("\nNo previous model found, or saved model specified!")
-        raise
+  def load_prev_model(self, model_save_path):
+    try:
+      meta_graph_file = model_save_path+'.meta'
+      with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        print("meta_graph_file: ",meta_graph_file)
+        new_saver = tf.train.import_meta_graph(meta_graph_file)
+        new_saver.restore(sess, model_save_path)
+      return 1
+    except Exception as e:
+      print("\nNo previous model found, or saved model specified!")
+      return 0
+
 
 if __name__ == '__main__':
   
-  data_dir = './data'
-  num_classes = 43
+  # train properties
+  epochs = 100
+  batch_size = 100
 
-  # Load pickled data
-  training_file = 'data/traffic-signs-data/train.p'
-  validation_file = 'data/traffic-signs-data/valid.p'
-  testing_file = 'data/traffic-signs-data/test.p'
 
-  with open(training_file, mode='rb') as f:
-      train = pickle.load(f)
-  with open(validation_file, mode='rb') as f:
-      validate = pickle.load(f)
-  with open(testing_file, mode='rb') as f:
-      test = pickle.load(f)
-      
-  X_train, y_train = train['features'], train['labels']
-  X_validate, y_validate = validate['features'], validate['labels']
-  X_test, y_test = test['features'], test['labels']
-
-  print("\nsize of training data: {}".format(np.shape(X_train)))
-  print("\nsize of training labels: {}".format(np.shape(y_train)))
-  print("\nsize of validating data: {}".format(np.shape(X_validate)))
-  print("\nsize of test data: {}".format(np.shape(X_test)))
-
-  y_train = to_categorical(y_train, num_classes)
-  y_validate = to_categorical(y_validate, num_classes)
-  y_test = to_categorical(y_test, num_classes)
-
-  print("\nsize of training labels: {}".format(np.shape(y_train)))
-
-  num_examples = np.shape(X_train)[0]
-
+  pretrained_model_dir = './data'
   # Download pretrained vgg model, if not downloaded yet
-  helper.maybe_download_pretrained_vgg(data_dir)
+  helper.maybe_download_pretrained_vgg(pretrained_model_dir)
   
   # load pretrained model
-  model_path = os.path.join(data_dir, 'vgg')
-
+  model_path = os.path.join(pretrained_model_dir, 'vgg')
   model_tag = 'vgg16'
   layer_out = 7
-  image_shape = (224, 224)
+  
 
-  # train properties
-  epochs = 30
-  batch_size = 100
+  num_classes = 1
+  dataset_dir = 'data/processed_dataset/all_data'
+
+  tf_data = TF_data(batch_size)
+
+
 
   with tf.Session() as sess:
 
@@ -291,7 +423,7 @@ if __name__ == '__main__':
     # define added layers
     # fc_units = [1024, 1024, num_classes]
     # rc_units = [128, 256, num_classes]
-    rc_units = [128, 128, 256, num_classes]
+    rc_units = [256, 128, 64, num_classes]
     dropouts = [0.4, 0.4, 1.0]
 
     # for training:
@@ -300,12 +432,21 @@ if __name__ == '__main__':
 
     print("\nLogits: ", tl_model.logits)
     
-    tl_model.train(sess, 
-                    X_train, y_train, 
-                    X_validate, y_validate,
+    tl_model.train_on_iter(sess, 
+                    tf_data,
+                    dataset_dir, 
                     epochs=epochs,
                     batch_size=batch_size,
-                    save_checkpoint='./data/model_saves/rc_test_train.ckpt')
+                    save_checkpoint='./data/model_saves/rc_train.ckpt')
 
-    # tl_model.test(X_test, y_test, 
-    #                 model_save_path='./data/model_saves/test_train.ckpt')
+
+    # # tl_model.train(sess, 
+    # #                 X_train, y_train, 
+    # #                 X_validate, y_validate,
+    # #                 epochs=epochs,
+    # #                 batch_size=batch_size,
+    # #                 save_checkpoint='./data/model_saves/rc_test_train.ckpt')
+
+
+    # # tl_model.test(X_test, y_test, 
+    # #                 model_save_path='./data/model_saves/test_train.ckpt')
