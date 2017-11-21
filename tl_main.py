@@ -24,6 +24,20 @@ else:
     print('Default GPU Device: {}'.format(tf.test.gpu_device_name()))
 
 
+def variable_summaries(var):
+  """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
+  with tf.name_scope('summaries'):
+    mean = tf.reduce_mean(var)
+    tf.summary.scalar('mean', mean)
+    with tf.name_scope('stddev'):
+      stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+    tf.summary.scalar('stddev', stddev)
+    tf.summary.scalar('max', tf.reduce_max(var))
+    tf.summary.scalar('min', tf.reduce_min(var))
+    tf.summary.histogram('histogram', var)
+
+
+
 class TF_data(object):
   """docstring for TF_data"""
   def __init__(self, batch_size=None):
@@ -112,7 +126,10 @@ class TL_model(object):
       self.image_input = graph.get_tensor_by_name('image_input:0')
     
     self.keep_prob = graph.get_tensor_by_name('keep_prob:0')
-    self.output_tensor = graph.get_tensor_by_name('layer'+str(layer_out)+'_out:0')
+
+    with tf.name_scope('vgg_out'):
+      self.output_tensor = graph.get_tensor_by_name('layer'+str(layer_out)+'_out:0')
+      variable_summaries(self.output_tensor)
 
     # define a placeholder to control dropout
     self.network_mode = tf.placeholder(tf.bool)
@@ -165,17 +182,19 @@ class TL_model(object):
     self.logits = tf.matmul(outputs, weight) + bias
 
 
-  def multi_rc_layers(self, rec_units, dropouts):
+  def multi_rc_layers(self, rec_units, dropouts, batch_size):
 
     self.num_classes = rec_units[-1]
     num_hidden = rec_units[-2]
 
-    # print("\nVGG Output Tensor: ", self.output_tensor)
+    print("\nVGG Output Tensor: ", self.output_tensor)
 
     # input data to lstm cell should be in the format: [batch_size, sequence_length, input_dimension]
     # -1 means, to infer the size of the input
-    rc_input = tf.reshape(self.output_tensor, [-1, 1, self.output_tensor.get_shape()[-1]])
-    # print("\nrc input Tensor: ", rc_input)
+
+    rc_input = tf.reshape(self.output_tensor, [-1, 16, self.output_tensor.get_shape()[-1]])
+    # rc_input = tf.squeeze(self.output_tensor,[2])
+    print("\nrc input Tensor: ", rc_input)
 
     # In case of multiple layers: here 2 LSTMCells
     rnn_layers = [tf.nn.rnn_cell.LSTMCell(size) for size in rec_units[:-1]]
@@ -192,14 +211,16 @@ class TL_model(object):
                                     # initial_state=initial_state,
                                     dtype=tf.float32)
 
-    outputs = tf.reshape(outputs, [-1, num_hidden])
-
     print("\n>> LSTM output: ",outputs)
 
-    weight = tf.get_variable("weight", [num_hidden, self.num_classes])
-    bias = tf.get_variable("bias", [self.num_classes])
+    outputs = tf.reshape(outputs, [batch_size, 16*64])
+    self.logits = tf.contrib.layers.fully_connected(outputs, 1)
+
+
+    # weight = tf.Variable(tf.truncated_normal(shape=(3, num_hidden, self.num_classes)))
+    # bias = tf.Variable(tf.zeros(self.num_classes))
   
-    self.logits = tf.matmul(outputs, weight) + bias
+    # self.logits = tf.matmul(outputs, weight) + bias
 
 
   def train(self, sess, X_train, y_train, X_validate=None, y_validate=None, 
@@ -219,7 +240,7 @@ class TL_model(object):
     
     Returns:
     """
-    with tf.name_scope('input'):
+    with tf.name_scope('label'):
       label = tf.placeholder(tf.int32, shape=(None))
     correct_label = tf.one_hot(label, self.num_classes)
 
@@ -271,9 +292,9 @@ class TL_model(object):
             epochs=30, batch_size=100, keep_prob=0.4, learning_rate=None,
             save_checkpoint=None):
 
-    prediction = tf.sigmoid(self.logits)
+    # prediction = tf.sigmoid(self.logits)
     
-    with tf.name_scope('input'):
+    with tf.name_scope('label'):
       label = tf.placeholder(tf.float32, shape=(None), name='label')
 
     # print("Number of samples: ", train_data.num_of_samples)
@@ -282,7 +303,8 @@ class TL_model(object):
     with tf.name_scope('train_loss'):
       train_loss = tf.reduce_mean(
         tf.losses.mean_squared_error(
-            labels=label, predictions=prediction))
+            labels=label, predictions=self.logits))
+      variable_summaries(train_loss)
 
     # set up training
     # first set up optimizer
@@ -290,9 +312,17 @@ class TL_model(object):
       optimizer = tf.train.AdamOptimizer()
       # Create a variable to track the global step.
       global_step = tf.Variable(0, name='global_step', trainable=False)
+      
+      # variable_summaries(global_step)
       # Use the optimizer to apply the gradients that minimize the loss
       # (and also increment the global step counter) as a single training step.
       train_op = optimizer.minimize(train_loss, global_step=global_step)
+
+
+    # %% for tensorboard
+    # Merge all the summaries and write them out
+    merged = tf.summary.merge_all()
+    writer = tf.summary.FileWriter('data/tb/', graph=tf.get_default_graph())
 
 
     if self.load_prev_model(save_checkpoint):
@@ -305,8 +335,6 @@ class TL_model(object):
     else:
       sess.run(tf.global_variables_initializer())
 
-    # for tensorboard
-    writer = tf.summary.FileWriter('data/tb/', graph=tf.get_default_graph())
 
     # print("\n Training... \n")
     for epoch in range(epochs):
@@ -334,13 +362,16 @@ class TL_model(object):
           print("End of dataset")
           break
 
-        _, loss = sess.run([train_op, train_loss], 
+        summary, loss = sess.run([merged, train_loss], 
             feed_dict={self.image_input:X_train, 
                         label:y_train, 
                         self.keep_prob:keep_prob,
                         self.network_mode:tf.estimator.ModeKeys.EVAL}) # , learning_rate:1e-4
 
         print("epoch: {}, batch: {}, loss: {}".format(epoch+1, current_batch, loss))
+
+        # write summary:
+        writer.add_summary(summary, current_batch)
 
 
 
@@ -359,11 +390,12 @@ class TL_model(object):
 
     correct_label = tf.placeholder(tf.int64, shape=(None))
     
-    correct_prediction = tf.equal(tf.argmax(self.logits, 1), correct_label)
-    accuracy_operation = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+    accuracy_operation = tf.equal(tf.argmax(self.logits, 1), correct_label)
+    accuracy_operation = tf.reduce_mean(tf.cast(accuracy_operation, tf.float32))
     
     num_examples = np.shape(X_data)[0]
     total_accuracy = 0
+    # sess.run(tf.global_variables_initializer())
     sess = tf.get_default_session()
     for offset in range(0, num_examples, batch_size):
       end = offset + batch_size
@@ -383,6 +415,23 @@ class TL_model(object):
     else:
       exit()
 
+  def predict(self, sess, X_data, model_save_path, keep_prob=1.0):
+    meta_graph_file = model_save_path+'.meta'
+    prediction = self.logits
+    
+    # with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    # print("meta_graph_file: ",meta_graph_file)
+    # new_saver = tf.train.import_meta_graph(meta_graph_file)
+    # new_saver.restore(sess, model_save_path)
+
+    # sess = tf.get_default_session()
+    predicted = sess.run(prediction, 
+            feed_dict={self.image_input:X_data, 
+                        self.keep_prob:keep_prob,
+                        self.network_mode:tf.estimator.ModeKeys.EVAL})
+    return predicted
+
   def load_prev_model(self, model_save_path):
     try:
       meta_graph_file = model_save_path+'.meta'
@@ -400,7 +449,7 @@ class TL_model(object):
 if __name__ == '__main__':
   
   # train properties
-  epochs = 100
+  epochs = 50
   batch_size = 100
 
 
@@ -434,17 +483,35 @@ if __name__ == '__main__':
 
     # for training:
     # tl_model.fc_layers(fc_units, dropouts) # for fully connected layers
-    tl_model.multi_rc_layers(rc_units, dropouts) # for lstm layers
+    tl_model.multi_rc_layers(rc_units, dropouts, batch_size) # for lstm layers
 
-    print("\nLogits: ", tl_model.logits)
+    # print("\nLogits: ", tl_model.logits)
     
     tl_model.train_on_iter(sess, 
                     tf_data,
                     dataset_dir, 
                     epochs=epochs,
                     batch_size=batch_size,
-                    save_checkpoint='./data/model_saves/rc_train_2.ckpt')
+                    save_checkpoint='./data/model_saves/rc_train.ckpt')
 
+    # test model on images in a directory
+    image1 = cv2.imread('data/processed_dataset/test_data/pouring_the_cup07_final-333-0-1-100.jpg')
+    image1 = cv2.resize(image1, (112, 112), interpolation=cv2.INTER_CUBIC)
+    image2 = cv2.imread('data/processed_dataset/test_data/pouring_the_cup07_final-333-0-1-100.jpg')
+    image2 = cv2.resize(image2, (112, 112), interpolation=cv2.INTER_CUBIC)
+    # print("Size of image: ", np.shape(image))
+    # image = np.expand_dims(image, axis=0)
+    images = np.array([image1, image2])
+    print("Size of data: ", np.shape(images))
+    prediction = tl_model.predict(sess, images, './data/model_saves/rc_train.ckpt')
+    print("Prediction: ",prediction)
+
+    # test_data = glob.glob('data/processed_dataset/test_data/*.jpg')
+    # for image_file in test_data:
+    #   image = cv2.imread(image_file,0)
+    #   label = float(image_file.split('-')[-1].split('.')[0])/100
+    #   prediction = tl_model.predict(image)
+    #   print("Prediction for {} is {}. Ground truth is {}".format(image_file, prediction, label))
 
     # # tl_model.train(sess, 
     # #                 X_train, y_train, 
