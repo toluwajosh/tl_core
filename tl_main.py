@@ -107,7 +107,10 @@ class TL_model(object):
 
     # model properties
     graph = tf.get_default_graph()
-    self.image_input = graph.get_tensor_by_name('image_input:0')
+
+    with tf.name_scope('input'):
+      self.image_input = graph.get_tensor_by_name('image_input:0')
+    
     self.keep_prob = graph.get_tensor_by_name('keep_prob:0')
     self.output_tensor = graph.get_tensor_by_name('layer'+str(layer_out)+'_out:0')
 
@@ -216,7 +219,8 @@ class TL_model(object):
     
     Returns:
     """
-    label = tf.placeholder(tf.int32, shape=(None))
+    with tf.name_scope('input'):
+      label = tf.placeholder(tf.int32, shape=(None))
     correct_label = tf.one_hot(label, self.num_classes)
 
     # loss function:
@@ -268,13 +272,15 @@ class TL_model(object):
             save_checkpoint=None):
 
     prediction = tf.sigmoid(self.logits)
-
-    label = tf.placeholder(tf.float32, shape=(None))
+    
+    with tf.name_scope('input'):
+      label = tf.placeholder(tf.float32, shape=(None), name='label')
 
     # print("Number of samples: ", train_data.num_of_samples)
 
     # loss function:
-    train_loss = tf.reduce_mean(
+    with tf.name_scope('train_loss'):
+      train_loss = tf.reduce_mean(
         tf.losses.mean_squared_error(
             labels=label, predictions=prediction))
 
@@ -299,8 +305,8 @@ class TL_model(object):
     else:
       sess.run(tf.global_variables_initializer())
 
-    # sess.run(train_data.iterator().initializer)
-    # sess.run(train_data.make_initializer())
+    # for tensorboard
+    writer = tf.summary.FileWriter('data/tb/', graph=tf.get_default_graph())
 
     # print("\n Training... \n")
     for epoch in range(epochs):
@@ -437,7 +443,7 @@ if __name__ == '__main__':
                     dataset_dir, 
                     epochs=epochs,
                     batch_size=batch_size,
-                    save_checkpoint='./data/model_saves/rc_train.ckpt')
+                    save_checkpoint='./data/model_saves/rc_train_2.ckpt')
 
 
     # # tl_model.train(sess, 
