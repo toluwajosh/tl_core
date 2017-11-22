@@ -59,6 +59,7 @@ def generate_arrays_from_file(data_dir, batch_size=50):
         x[batch_index,:,:,:] = image
         y[batch_index] = label
         batch_index += 1
+        # print("no ", i)
         if (i+1)%batch_size==0:
           # X = np.stack(x)
           # Y = np.stack(y)
@@ -79,16 +80,15 @@ if __name__ == '__main__':
 
   # datset
   num_classes = 1
-  dataset_dir = 'data\\processed_dataset\\all_data'
-
-  # tf_data = TF_data(batch_size)
+  # dataset_dir = 'data\\processed_dataset\\all_data'
+  dataset_dir = 'data/processed_dataset/all_data'
 
   # model parameters
   CONV = 2
   POOL = 2
   DROP = 0.3
   KERNEL = 3
-  DENSE_UNITS = 256
+  DENSE_UNITS = 1024
   INIT_ = 'he_normal'
   BORDER = 'valid'
   
@@ -104,8 +104,8 @@ if __name__ == '__main__':
 
   # first layer
   model.add(Convolution2D(64, 
-              kernel_size=(5,1),
-              strides=(1,1),
+              kernel_size=(3,3),
+              strides=(2,2),
               init=INIT_,
               input_shape=(in_w, in_h,features_used), 
               border_mode='same')) 
@@ -114,9 +114,9 @@ if __name__ == '__main__':
   model.add(Activation('relu'))
 
   # layer
-  model.add(Convolution2D(64, 
-              kernel_size=(1,5),
-              strides=(1,1),
+  model.add(Convolution2D(96, 
+              kernel_size=(3,3),
+              strides=(2,2),
               init=INIT_,
               border_mode=BORDER))
   model.add(MaxPooling2D())
@@ -124,9 +124,9 @@ if __name__ == '__main__':
   # model.add(Dropout(DROP))
 
   # layer
-  model.add(Convolution2D(96, 
-              kernel_size=(3,5),
-              strides=(1,1),
+  model.add(Convolution2D(192, 
+              kernel_size=(3,3),
+              strides=(2,2),
               init=INIT_,
               border_mode=BORDER))
   # model.add(MaxPooling2D())
@@ -134,31 +134,32 @@ if __name__ == '__main__':
   
 
   # layer
-  model.add(Convolution2D(96, 
-              kernel_size=(3,3),
-              strides=(1,1),
+  model.add(Convolution2D(256, 
+              kernel_size=(2,2),
+              strides=(2,2),
               init=INIT_,
               border_mode=BORDER))
   # model.add(Dropout(DROP))
   # model.add(MaxPooling2D())
   model.add(Activation('relu'))
 
-  # layer
-  model.add(Convolution2D(128,  # you can increase this line to 128
-              kernel_size=(2,2),
-              strides=(1,1),
-              init=INIT_,
-              border_mode=BORDER))
+  # # layer
+  # model.add(Convolution2D(128,  # you can increase this line to 128
+  #             kernel_size=(2,2),
+  #             strides=(1,1),
+  #             init=INIT_,
+  #             border_mode=BORDER))
 
   #%% added an LSTM layer
   model.add(Flatten())
-  model.add(Reshape((features_used,model.output_shape[1]//features_used)))
-  model.add(LSTM(DENSE_UNITS))
+  # model.add(Reshape((features_used,model.output_shape[1]//features_used)))
+  model.add(Dense(DENSE_UNITS))
+  # model.add(LSTM(DENSE_UNITS))
   model.add(Activation('relu'))
   model.add(Dropout(DROP))
 
   # layer
-  model.add(Dense(DENSE_UNITS//2))
+  model.add(Dense(100))
   model.add(Activation('relu'))
   model.add(Dropout(DROP))
 
@@ -186,28 +187,28 @@ if __name__ == '__main__':
   # a callback to save a list of the losses over each batch during training
   class LossHistory(Callback):
     def on_train_begin(self, logs={}):
-      train_loss = []
+      self.train_loss = []
 
     def on_batch_end(self, batch, logs={}):
-      train_loss.append(logs.get('loss'))
+      self.train_loss.append(logs.get('loss'))
 
   # a callback to save a list of the accuracies over each batch during training
   class AccHistory(Callback):
     def on_train_begin(self, logs={}):
-      train_acc = []
+      self.train_acc = []
 
     def on_batch_end(self, batch, logs={}):
-      train_acc.append(logs.get('acc'))
+      self.train_acc.append(logs.get('acc'))
 
   # callbacks
   loss_hist = LossHistory()
   acc_hist = AccHistory()
-  early_stop = EarlyStopping(monitor='val_loss', patience=early_stop_patience, verbose=0, mode='min')
-  checkpoint = ModelCheckpoint('model_saves/new_CNN_models/'+model_name+'_model.{epoch:02d}-{val_loss:.3f}', 
-                                monitor='val_loss', verbose=0, save_best_only=True, 
+  # early_stop = EarlyStopping(monitor='val_loss', patience=early_stop_patience, verbose=0, mode='min')
+  checkpoint = ModelCheckpoint('data/model_saves/keras_models/'+model_name+'_model.{epoch:02d}-{loss:.3f}', 
+                                monitor='loss', verbose=0, save_best_only=True, 
                                 save_weights_only=False, mode='auto')
-  reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.3,
-            patience=3, min_lr=0.000001)
+  # reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.3,
+  #           patience=3, min_lr=0.000001)
 
   # #%% Get Training model
   # model = get_model(features_used=features_used, 
@@ -223,6 +224,6 @@ if __name__ == '__main__':
   #               callbacks=[loss_hist, acc_hist, early_stop, checkpoint, reduce_lr])
 
   model.fit_generator(generate_arrays_from_file(dataset_dir, 100), 
-                      steps_per_epoch=20000, epochs=EPOCHS, verbose=1,
-                      callbacks=[loss_hist, acc_hist, early_stop, checkpoint, reduce_lr])
+                      steps_per_epoch=330, epochs=EPOCHS, verbose=1,
+                      callbacks=[loss_hist, acc_hist, checkpoint])
 
