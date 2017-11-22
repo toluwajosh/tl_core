@@ -194,7 +194,9 @@ class TL_model(object):
     # input data to lstm cell should be in the format: [batch_size, sequence_length, input_dimension]
     # -1 means, to infer the size of the input
 
-    rc_input = tf.reshape(self.output_tensor, [-1, 16, self.output_tensor.get_shape()[-1]])
+    # rc_input = tf.reshape(self.output_tensor, [-1, 16, self.output_tensor.get_shape()[-1]])
+    rc_input = tf.reshape(self.output_tensor, [batch_size, 1, 16*4096])
+
     # rc_input = tf.squeeze(self.output_tensor,[2])
     print("\nrc input Tensor: ", rc_input)
 
@@ -216,7 +218,7 @@ class TL_model(object):
 
       print("\n>> LSTM output: ",outputs)
 
-      outputs = tf.reshape(outputs, [batch_size, 64*64])
+      outputs = tf.reshape(outputs, [batch_size, 256])
 
     with tf.name_scope('final_out'):
       # self.logits = tf.contrib.layers.fully_connected(outputs, 1)
