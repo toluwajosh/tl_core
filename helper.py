@@ -84,7 +84,7 @@ def maybe_download_pretrained_vgg(data_dir):
 #         random.shuffle(image_paths)
 #         for batch_i in range(0, len(image_paths), batch_size):
 #             images = []
-#             gt_images = []
+#             labels = []
 #             for image_file in image_paths[batch_i:batch_i+batch_size]:
 #                 gt_image_file = label_paths[os.path.basename(image_file)]
 
@@ -106,9 +106,9 @@ def maybe_download_pretrained_vgg(data_dir):
 
 
 #                 images.append(image)
-#                 gt_images.append(gt_image)
+#                 labels.append(gt_image)
 
-#             yield np.array(images), np.array(gt_images)
+#             yield np.array(images), np.array(labels)
 #     return get_batches_fn
 
 
